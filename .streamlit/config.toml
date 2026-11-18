@@ -1,0 +1,17 @@
+# Interface SmartDeck (étape 13). NFR-01 / NFR-03 : tout reste sur la machine.
+[browser]
+gatherUsageStats = false   # Streamlit n'envoie aucune statistique d'utilisation
+
+[server]
+address = "localhost"      # accessible seulement depuis ce PC
+port = 8501
+headless = true            # n'ouvre pas de navigateur tout seul
+maxUploadSize = 50         # Mo
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+base = "light"
+primaryColor = "#1F3A5F"
+font = "sans serif"

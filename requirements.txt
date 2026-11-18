@@ -1,0 +1,9 @@
+# Étape 2 : socle. Les bibliothèques lourdes (Docling, PaddleOCR) viendront aux étapes suivantes.
+pydantic>=2
+python-pptx
+matplotlib
+ollama
+# Étape 5 : extraction PDF natif (Docling viendra plus tard pour les tableaux complexes)
+pymupdf
+pytesseract
+streamlit

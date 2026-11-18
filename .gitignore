@@ -1,0 +1,12 @@
+.venv/
+.cache/
+output/
+__pycache__/
+*.pyc
+tools/graphviz/
+tools/libreoffice/
+output/*.work.json
+.venv-ft/
+finetune/models/
+finetune/out/
+finetune/data/raw/

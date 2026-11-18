@@ -1,0 +1,25 @@
+{
+  "_description": "Jeu d'acceptation (étape 14, CDC section 10) : 2 textes, 3 PDF natifs, 2 PDF scannés, 3 images dont un graphique. Pour chaque document : type attendu, langue attendue, nombre de slides demandé, faits qui doivent apparaître dans le Document extrait, visuels attendus.",
+  "documents": [
+    {"file": "rapport_verdi.md", "origin": "text", "language": "fr", "slides": 6,
+     "facts": ["4,2 millions", "45", "Lyon"], "visuals": ["chart"]},
+    {"file": "greenfield_note.txt", "origin": "text", "language": "en", "slides": 7,
+     "facts": ["8,400", "35 staff", "Angers"], "visuals": ["diagram"]},
+    {"file": "rapport_verdi.pdf", "origin": "pdf", "language": "fr", "slides": 6,
+     "facts": ["4,2 millions", "1 170", "Lyon"], "visuals": ["chart"]},
+    {"file": "bilan_lire_ensemble.pdf", "origin": "pdf", "language": "fr", "slides": 6,
+     "facts": ["620 enfants", "52 %", "86 000"], "visuals": ["chart", "diagram"]},
+    {"file": "cahier_des_charges.pdf", "origin": "pdf", "language": "fr", "slides": 10,
+     "facts": ["Ollama", "python-pptx", "CA-06"], "visuals": ["diagram"]},
+    {"file": "rapport_verdi_scanne.pdf", "origin": "scanned_pdf", "language": "fr", "slides": 5,
+     "facts": ["4,2 millions", "45 salariés", "Lyon"], "visuals": ["chart"]},
+    {"file": "rapport_nour_scanne.pdf", "origin": "scanned_pdf", "language": "ar", "slides": 5,
+     "facts": ["340", "صفاقس", "400"], "visuals": []},
+    {"file": "verdi_ventes.png", "origin": "image", "language": "fr", "slides": 5,
+     "facts": ["950", "1170"], "visuals": ["chart"]},
+    {"file": "verdi_processus.jpg", "origin": "image", "language": "fr", "slides": 5,
+     "facts": ["Prospection", "Facturation"], "visuals": ["diagram"]},
+    {"file": "verdi_note.png", "origin": "image", "language": "fr", "slides": 5,
+     "facts": ["45 salariés", "Lyon"], "visuals": []}
+  ]
+}
