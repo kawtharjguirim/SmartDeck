@@ -21,6 +21,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
 
 from train import base_model  # noqa: E402
 
+QUANTIZE = {"1.5b": "int8", "3b": "int4"}  # 3B en int8 (≈ 3,3 Go) déborderait de la VRAM
+
 
 def qwen_template() -> str:
     """Bloc TEMPLATE du Modelfile de qwen2.5:3b (même famille, même format de dialogue)."""
@@ -31,24 +33,27 @@ def qwen_template() -> str:
     return modelfile[start:end]
 
 
-def main(size: str) -> None:
-    out = HERE / "out" / f"writer-{size}"
+def main(size: str, pilot: bool = False) -> None:
+    out = HERE / "out" / f"writer-{size}{'-pilote' if pilot else ''}"
     merged = out / "merged"
     tokenizer = AutoTokenizer.from_pretrained(base_model(size))
-    model = AutoModelForCausalLM.from_pretrained(base_model(size), torch_dtype=torch.float16,
+    model = AutoModelForCausalLM.from_pretrained(base_model(size), dtype=torch.float16,
                                                  device_map={"": "cpu"})
     model = PeftModel.from_pretrained(model, out / "adapter").merge_and_unload()
     model.save_pretrained(merged, safe_serialization=True)
     tokenizer.save_pretrained(merged)
 
-    name = f"smartdeck-writer-{size}"
+    name = f"smartdeck-writer-{size}{'-pilote' if pilot else ''}"
     (out / "Modelfile").write_text(
         f"FROM {merged.as_posix()}\n{qwen_template()}\n"
         'PARAMETER stop "<|im_end|>"\nPARAMETER stop "<|endoftext|>"\n', encoding="utf-8")
+    # Ollama 0.40 : types int4 / int8 (anciennement q4_K_M…). Un 1,5B en int8 ≈ 1,6 Go,
+    # entièrement sur le GPU, avec moins de perte de qualité qu'en int4.
     subprocess.run(["ollama", "create", name, "-f", str(out / "Modelfile"),
-                    "--quantize", "q4_K_M"], check=True)
+                    "--quantize", QUANTIZE.get(size, "int4")], check=True)
     print(f"Modèle Ollama créé : {name}")
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "1.5b")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    main(args[0] if args else "1.5b", pilot="--pilote" in sys.argv)

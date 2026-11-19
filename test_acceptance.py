@@ -318,5 +318,9 @@ def write_report(rows: list[dict], checks_only: bool) -> None:
 
 
 if __name__ == "__main__":
+    # --sortie=nom : résultats dans output/nom (comparer des modèles sans écraser la référence)
+    for arg in sys.argv[1:]:
+        if arg.startswith("--sortie="):
+            OUT = config.OUTPUT_DIR / arg.split("=", 1)[1]
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     run_campaign(args[0] if args else None, "--checks" in sys.argv)

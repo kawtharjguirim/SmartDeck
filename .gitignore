@@ -10,3 +10,4 @@ output/*.work.json
 finetune/models/
 finetune/out/
 finetune/data/raw/
+.claude/ 

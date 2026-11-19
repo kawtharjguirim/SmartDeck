@@ -42,20 +42,25 @@ def load_split(name: str) -> Dataset:
                               for r in rows])
 
 
-def main(size: str) -> None:
+def main(size: str, pilot: bool = False) -> None:
+    """`pilot` : 10 pas seulement, pour vérifier toute la chaîne avant le vrai entraînement."""
     model_dir = base_model(size)
-    out = HERE / "out" / f"writer-{size}"
+    out = HERE / "out" / f"writer-{size}{'-pilote' if pilot else ''}"
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
     train, valid = load_split("train"), load_split("valid")
 
-    lengths = [len(tokenizer.apply_chat_template(r["prompt"] + r["completion"], tokenize=True))
-               for r in train]
+    lengths = [len(tokenizer.apply_chat_template(r["prompt"] + r["completion"], tokenize=True,
+                                                 return_dict=True)["input_ids"]) for r in train]
     print(f"{len(train)} exemples d'entraînement, {len(valid)} de validation ; "
           f"longueur max {max(lengths)} tokens (limite {MAX_LENGTH})", flush=True)
 
+    steps = {"logging_steps": 5, "eval_steps": 20, "save_steps": 20}
+    if pilot:
+        steps = {"logging_steps": 1, "eval_steps": 5, "save_steps": 5, "max_steps": 10}
     config = SFTConfig(
         output_dir=str(out),
         num_train_epochs=3,
+        **steps,
         learning_rate=2e-4,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=8,
@@ -66,12 +71,9 @@ def main(size: str) -> None:
         max_length=MAX_LENGTH,
         completion_only_loss=True,
         lr_scheduler_type="cosine",
-        warmup_ratio=0.05,
-        logging_steps=5,
+        warmup_steps=0 if pilot else 5,  # ≈ 5 % des pas d'un entraînement de 3 époques
         eval_strategy="steps",
-        eval_steps=20,
         save_strategy="steps",
-        save_steps=20,
         save_total_limit=2,
         load_best_model_at_end=True,  # garde le meilleur point sur la validation
         metric_for_best_model="eval_loss",
@@ -100,4 +102,5 @@ def main(size: str) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "1.5b")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    main(args[0] if args else "1.5b", pilot="--pilote" in sys.argv)
