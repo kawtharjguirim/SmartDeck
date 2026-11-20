@@ -24,6 +24,17 @@ VISION_MAX_TOKENS = 800  # réponse attendue ≈ 200 tokens ; au-delà, le modè
 VISION_RETRIES = 1
 OLLAMA_HOST = "http://127.0.0.1:11434"  # local uniquement (NFR-01)
 
+# Agent relecteur (option, au-dessus du pipeline) : un modèle multimodal qui sait
+# appeler des outils. Il regarde les slides rendues et décide quoi réécrire ; le
+# code ne garde une nouvelle version que si ses défauts mesurés n'augmentent pas.
+AGENT_MODEL = os.environ.get("SMARTDECK_AGENT_MODEL", "qwen3-vl:4b-instruct")
+# Réécritures demandées par l'agent : même modèle par défaut (pas d'échange en VRAM ;
+# en recette, Qwen3-VL n'a écrit aucune note « Cette slide… »).
+AGENT_WRITE_MODEL = os.environ.get("SMARTDECK_AGENT_WRITE_MODEL", AGENT_MODEL)
+AGENT_MAX_STEPS = 12      # appels d'outils au plus
+AGENT_MAX_REWRITES = 5    # réécritures au plus (toutes slides confondues)
+AGENT_IMAGE_DPI = 80      # rendu des slides montrées à l'agent (≈ 1070 × 600 px)
+
 # --- Marque (FR-11) -----------------------------------------------------
 # Si templates/brand.pptx existe, ses mises en page sont utilisées ; sinon un
 # template 16:9 est créé. Un logo optionnel : templates/logo.png.

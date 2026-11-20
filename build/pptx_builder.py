@@ -6,6 +6,9 @@
 - Notes orateur écrites dans chaque slide.
 - Étape 11 : slides « chart » (Matplotlib) et « diagram » (Graphviz) en image,
   avec les puces à côté ou dessous.
+- Thèmes (build/themes.py) : couleurs, polices et décor choisis à la construction.
+- Modèle d'entreprise importé (build/template_import.py) : ses mises en page, son décor
+  et ses styles de texte sont gardés ; seule la taille du texte est fixée.
 """
 import tempfile
 from dataclasses import dataclass, field
@@ -21,6 +24,7 @@ from pptx.oxml.ns import qn
 from pptx.util import Emu, Inches, Pt
 
 import config
+from build.themes import Theme, get_theme, recolor_dot
 from schemas import Deck, Slide
 from quality.text import is_rtl
 from visuals.charts import render_chart
@@ -81,27 +85,67 @@ def _layout(prs: Presentation, name: str, index: int):
     return prs.slide_layouts[index]
 
 
+def _pick_layout(prs: Presentation, theme: Theme, title: bool):
+    """Mise en page : celle choisie à l'import du modèle, sinon par nom (template par défaut)."""
+    index = theme.title_layout if title else theme.content_layout
+    if index is not None and index < len(prs.slide_layouts):
+        return prs.slide_layouts[index]
+    return _layout(prs, "Title Slide", 0) if title else _layout(prs, "Title and Content", 1)
+
+
+def _fix_geometry(slide) -> None:
+    """Garde-fou (modèles importés) : chaque zone prend la position de la zone de même type
+    de sa mise en page, au cas où l'héritage par numéro (idx) pointerait ailleurs."""
+    by_type = {}
+    for ph in slide.slide_layout.placeholders:
+        by_type.setdefault(ph.placeholder_format.type, ph)
+    for ph in slide.placeholders:
+        src = by_type.get(ph.placeholder_format.type)
+        if src is not None and src.width and src.height:
+            _place(ph, src.left, src.top, src.width, src.height)
+
+
+def _no_bullet(frame) -> None:
+    for p in frame.paragraphs:
+        pPr = p._p.get_or_add_pPr()
+        if pPr.find(qn("a:buNone")) is None:
+            pPr.append(pPr.makeelement(qn("a:buNone"), {}))
+        pPr.set("marL", "0")
+        pPr.set("indent", "0")
+
+
+def _drop_empty(slide) -> None:
+    """Zones réservées restées vides (image, second texte…) : supprimées, sinon PowerPoint
+    affiche « Cliquez pour ajouter… » en édition."""
+    for ph in list(slide.placeholders):
+        if ph.has_text_frame and not ph.text_frame.text.strip():
+            ph._element.getparent().remove(ph._element)
+        elif not ph.has_text_frame and ph.placeholder_format.type == PP_PLACEHOLDER.PICTURE:
+            ph._element.getparent().remove(ph._element)
+
+
 def _placeholder(slide, types):
     return next((ph for ph in slide.placeholders if ph.placeholder_format.type in types), None)
 
 
 # --- Mesure du texte (CA-03) ---------------------------------------------
 
-_fonts: dict[int, ImageFont.FreeTypeFont] = {}
+_fonts: dict[tuple[str, int], ImageFont.FreeTypeFont | None] = {}
 
 
-def _font(size: int) -> ImageFont.FreeTypeFont | None:
-    if size not in _fonts:
+def _font(size: int, font_file: str) -> ImageFont.FreeTypeFont | None:
+    key = (font_file, size)
+    if key not in _fonts:
         try:
-            _fonts[size] = ImageFont.truetype(config.BRAND["font_file"], size)
+            _fonts[key] = ImageFont.truetype(font_file, size)
         except OSError:
-            return None
-    return _fonts[size]
+            _fonts[key] = None
+    return _fonts[key]
 
 
-def _line_count(text: str, size: int, width_pt: float) -> int:
+def _line_count(text: str, size: int, width_pt: float, font_file: str) -> int:
     """Nombre de lignes après retour à la ligne automatique, mesuré avec la vraie police."""
-    font = _font(size)
+    font = _font(size, font_file)
     if font is None:  # police introuvable : estimation (0,5 × taille par caractère)
         return max(1, -(-int(len(text) * size * 0.5) // int(width_pt)))
     lines, current = 1, ""
@@ -115,14 +159,16 @@ def _line_count(text: str, size: int, width_pt: float) -> int:
 
 
 def fit_size(paragraphs: list[str], width: Emu, height: Emu, sizes: tuple[int, ...],
-             indent: Emu = Emu(0), bold: bool = False) -> tuple[int, bool]:
-    """Plus grande taille pour laquelle le texte tient dans la zone. (taille, tient ?)"""
+             indent: Emu = Emu(0), font_file: str | None = None) -> tuple[int, bool]:
+    """Plus grande taille pour laquelle le texte tient dans la zone. (taille, tient ?)
+
+    `font_file` : fichier de la police réellement utilisée (version grasse pour les titres).
+    """
+    font_file = font_file or get_theme(None).font_file
     width_pt = (width - 2 * MARGIN_X - indent) / 12700  # 1 pt = 12 700 EMU
-    if bold:
-        width_pt *= 0.92  # le gras est environ 8 % plus large que la police mesurée
     height_pt = (height - 2 * MARGIN_Y) / 12700
     for size in sizes:
-        lines = sum(_line_count(p, size, width_pt) for p in paragraphs)
+        lines = sum(_line_count(p, size, width_pt, font_file) for p in paragraphs)
         needed = lines * size * LINE_SPACING + (len(paragraphs) - 1) * size * PARA_SPACE
         if needed <= height_pt:
             return size, True
@@ -131,8 +177,9 @@ def fit_size(paragraphs: list[str], width: Emu, height: Emu, sizes: tuple[int, .
 
 # --- Remplissage ----------------------------------------------------------
 
-def _write(frame, paragraphs: list[str], size: int, color: str, bold=False,
-           align=None, space_after=True) -> None:
+def _write(frame, paragraphs: list[str], size: int, color: str | None, bold: bool | None = False,
+           align=None, space_after=True, font: str | None = "Calibri") -> None:
+    """Écrit les paragraphes. color, font ou bold à None : style hérité du modèle."""
     frame.clear()
     frame.word_wrap = True
     frame.auto_size = MSO_AUTO_SIZE.NONE
@@ -150,9 +197,12 @@ def _write(frame, paragraphs: list[str], size: int, color: str, bold=False,
             p.space_after = Pt(size * PARA_SPACE)
         for run in p.runs:
             run.font.size = Pt(size)
-            run.font.name = config.BRAND["font"]
-            run.font.bold = bold
-            run.font.color.rgb = _rgb(color)
+            if font is not None:
+                run.font.name = font
+            if bold is not None:
+                run.font.bold = bold
+            if color is not None:
+                run.font.color.rgb = _rgb(color)
             if rtl:  # langue et police « complex script » (Calibri n'a pas de glyphes arabes)
                 rpr = run._r.get_or_add_rPr()
                 rpr.set("lang", "ar-SA")
@@ -160,8 +210,11 @@ def _write(frame, paragraphs: list[str], size: int, color: str, bold=False,
                 rpr.append(cs)
 
 
-def _rect(slide, left, top, width, height, color: str):
-    shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, top, width, height)
+def _rect(slide, left, top, width, height, color: str, rounded: bool = False):
+    kind = MSO_SHAPE.ROUNDED_RECTANGLE if rounded else MSO_SHAPE.RECTANGLE
+    shape = slide.shapes.add_shape(kind, left, top, width, height)
+    if rounded:
+        shape.adjustments[0] = 0.5  # bouts entièrement arrondis
     shape.fill.solid()
     shape.fill.fore_color.rgb = _rgb(color)
     shape.line.fill.background()
@@ -179,43 +232,64 @@ def _send_to_back(slide, shape) -> None:
     tree.insert(2, shape._element)  # après les propriétés du groupe : tout au fond
 
 
-def _footer(slide, text: str, number: str) -> None:
+def _background(slide, prs, color: str | None) -> None:
+    if color:
+        _send_to_back(slide, _rect(slide, 0, 0, prs.slide_width, prs.slide_height, color))
+
+
+def _footer(slide, text: str, number: str, theme: Theme) -> None:
     """Pied de page : titre de la présentation à gauche, numéro de slide à droite."""
     for content, left, width, align in (
         (text, Inches(0.8), Inches(9.0), PP_ALIGN.LEFT),
         (number, Inches(10.5), Inches(2.0), PP_ALIGN.RIGHT),
     ):
         box = slide.shapes.add_textbox(left, Inches(6.95), width, Inches(0.35))
-        _write(box.text_frame, [content], 11, config.BRAND["muted"], align=align, space_after=False)
+        _write(box.text_frame, [content], 11, theme.muted, align=align, space_after=False,
+               font=theme.font)
 
 
-def _logo(slide, prs) -> None:
-    if config.LOGO.exists():
-        slide.shapes.add_picture(str(config.LOGO), prs.slide_width - Inches(1.6),
+def _logo(slide, prs, logo: Path | None) -> None:
+    if logo is not None and logo.exists():
+        slide.shapes.add_picture(str(logo), prs.slide_width - Inches(1.6),
                                  Inches(0.3), height=Inches(0.6))
 
 
-def _title_slide(prs, deck: Deck, slide_data: Slide, decorate: bool, source: str) -> None:
-    slide = prs.slides.add_slide(_layout(prs, "Title Slide", 0))
-    brand = config.BRAND
-    if decorate:  # fond bleu nuit et filet orange
-        _send_to_back(slide, _rect(slide, 0, 0, prs.slide_width, prs.slide_height, brand["primary"]))
-        rule_left = prs.slide_width - Inches(0.9 + 1.4) if is_rtl(deck.title) else Inches(0.9)
-        _rect(slide, rule_left, Inches(4.25), Inches(1.4), Inches(0.08), brand["accent"])
+def _title_slide(prs, deck: Deck, slide_data: Slide, decorate: bool, source: str,
+                 theme: Theme, logo: Path | None) -> None:
+    slide = prs.slides.add_slide(_pick_layout(prs, theme, title=True))
+    if theme.inherit:
+        _fix_geometry(slide)
+    keep = theme.inherit  # modèle importé : couleurs, polices et gras du modèle
+    if decorate:  # fond, filet ou bande latérale selon le thème
+        _background(slide, prs, theme.title_bg)
+        if theme.title_rule == "band":  # bande verticale du côté où le texte commence
+            band_left = prs.slide_width - Inches(0.35) if is_rtl(deck.title) else 0
+            _rect(slide, band_left, 0, Inches(0.35), prs.slide_height, theme.primary)
+            _rect(slide, Inches(0.9), Inches(4.3), Inches(11.5), Inches(0.025), theme.muted)
+        elif theme.title_rule == "short":
+            rule_left = prs.slide_width - Inches(0.9 + 1.4) if is_rtl(deck.title) else Inches(0.9)
+            _rect(slide, rule_left, Inches(4.25), Inches(1.4), Inches(0.08), theme.accent,
+                  rounded=theme.rounded)
     title = _placeholder(slide, TITLE_TYPES)
     if title is not None:
         size, _ = fit_size([deck.title], title.width, title.height, (44, 40, 36, 32, 28),
-                           bold=True)
+                           font_file=theme.title_font_file)
         _write(title.text_frame, [deck.title], size,
-               "FFFFFF" if decorate else brand["primary"], bold=True,
-               align=PP_ALIGN.LEFT, space_after=False)
+               None if keep else theme.title_slide_text if decorate else theme.primary,
+               bold=None if keep else True, align=None if keep else PP_ALIGN.LEFT,
+               space_after=False, font=None if keep else theme.title_font)
     subtitle = _placeholder(slide, BODY_TYPES)
     if subtitle is not None:
         text = f"{source} · {date.today().strftime('%d/%m/%Y')}" if source else \
             date.today().strftime("%d/%m/%Y")
-        _write(subtitle.text_frame, [text], 18, "D6DEE8" if decorate else brand["muted"],
-               align=PP_ALIGN.LEFT, space_after=False)
-    _logo(slide, prs)
+        _write(subtitle.text_frame, [text], 18,
+               None if keep else theme.title_slide_sub if decorate else theme.muted,
+               bold=None if keep else False, align=None if keep else PP_ALIGN.LEFT,
+               space_after=False, font=None if keep else theme.font)
+        if keep:  # certains modèles mettent des puces dans le sous-titre : pas ici
+            _no_bullet(subtitle.text_frame)
+    _drop_empty(slide)
+    _logo(slide, prs, logo)
     slide.notes_slide.notes_text_frame.text = slide_data.notes
 
 
@@ -229,7 +303,8 @@ def _picture(slide, path: Path, left, top, width, height) -> None:
     slide.shapes.add_picture(str(path), left + (width - w) // 2, top + (height - h) // 2, w, h)
 
 
-def _visual(slide, body, data: Slide, number: int, workdir: Path, warnings: list[str]) -> None:
+def _visual(slide, body, data: Slide, number: int, workdir: Path, warnings: list[str],
+            theme: Theme) -> None:
     """Graphique ou diagramme dans la zone de texte ; les puces se placent à côté ou dessous.
 
     Graphique et diagramme haut : image à gauche (62 %), puces à droite.
@@ -241,9 +316,10 @@ def _visual(slide, body, data: Slide, number: int, workdir: Path, warnings: list
         if data.layout == "chart":
             img_w = int(width * 0.62)
             path = render_chart(data.chart, workdir / f"chart_{number}.png",
-                                img_w / 914400, height / 914400)
+                                img_w / 914400, height / 914400, theme)
         else:
-            path = render_dot(data.diagram_dot, workdir / f"diagram_{number}.png")
+            path = render_dot(recolor_dot(data.diagram_dot, theme),
+                              workdir / f"diagram_{number}.png")
     except (GraphvizError, OSError, ValueError) as e:
         warnings.append(f"Slide {number} « {data.title} » : visuel non rendu ({e}), "
                         "puces seules")
@@ -262,44 +338,68 @@ def _visual(slide, body, data: Slide, number: int, workdir: Path, warnings: list
 
 
 def _content_slide(prs, deck: Deck, data: Slide, number: int, total: int,
-                   decorate: bool, warnings: list[str], workdir: Path) -> None:
-    slide = prs.slides.add_slide(_layout(prs, "Title and Content", 1))
-    brand = config.BRAND
+                   decorate: bool, warnings: list[str], workdir: Path,
+                   theme: Theme, logo: Path | None) -> None:
+    slide = prs.slides.add_slide(_pick_layout(prs, theme, title=False))
+    if theme.inherit:
+        _fix_geometry(slide)
+    keep = theme.inherit
+    if decorate:
+        _background(slide, prs, theme.background)
     title = _placeholder(slide, TITLE_TYPES)
     if title is not None:
         size, ok = fit_size([data.title], title.width, title.height, config.TITLE_SIZES,
-                            bold=True)
+                            font_file=theme.title_font_file)
         if not ok:
             warnings.append(f"Slide {number} : titre trop long pour sa zone")
-        _write(title.text_frame, [data.title], size, brand["primary"], bold=True,
-               align=PP_ALIGN.LEFT, space_after=False)
-        if decorate:  # filet sous le titre, du côté où le titre commence (arabe : à droite)
+        _write(title.text_frame, [data.title], size,
+               None if keep else theme.title_color if decorate else theme.primary,
+               bold=None if keep else True, align=None if keep else PP_ALIGN.LEFT,
+               space_after=False, font=None if keep else theme.title_font)
+        rule_top = title.top + title.height + Inches(0.05)
+        if decorate and theme.content_rule == "full":  # filet fin pleine largeur
+            _rect(slide, title.left + MARGIN_X, rule_top, title.width - 2 * MARGIN_X,
+                  Inches(0.025), theme.accent)
+        elif decorate and theme.content_rule == "short":
+            # filet court sous le titre, du côté où le titre commence (arabe : à droite)
             rule_w = Inches(1.2)
             left = (title.left + title.width - MARGIN_X - rule_w) if is_rtl(data.title) \
                 else title.left + MARGIN_X
-            _rect(slide, left, title.top + title.height + Inches(0.05),
-                  rule_w, Inches(0.06), brand["accent"])
+            _rect(slide, left, rule_top, rule_w, Inches(0.06), theme.accent,
+                  rounded=theme.rounded)
     body = _placeholder(slide, BODY_TYPES)
     if body is not None and data.layout in ("chart", "diagram"):
-        _visual(slide, body, data, number, workdir, warnings)
+        _visual(slide, body, data, number, workdir, warnings, theme)
     if body is not None:
         if data.bullets:
             size, ok = fit_size(data.bullets, body.width, body.height, config.BODY_SIZES,
-                                indent=BULLET_INDENT)
+                                indent=BULLET_INDENT, font_file=theme.font_file)
             if not ok:
                 warnings.append(f"Slide {number} « {data.title} » : texte trop long, "
                                 f"risque de débordement même en {size} pt")
-            _write(body.text_frame, data.bullets, size, brand["text"])
+            _write(body.text_frame, data.bullets, size, None if keep else theme.text,
+                   bold=None if keep else False, font=None if keep else theme.font)
+            if keep:  # retrait de puce explicite : certains modèles n'en définissent pas
+                for p in body.text_frame.paragraphs:
+                    pPr = p._p.get_or_add_pPr()
+                    pPr.set("marL", str(int(BULLET_INDENT)))
+                    pPr.set("indent", str(-int(BULLET_INDENT * 0.75)))
         else:
             body._element.getparent().remove(body._element)  # pas de zone vide
     if decorate:
-        _footer(slide, deck.title, f"{number} / {total}")
-    _logo(slide, prs)
+        _footer(slide, deck.title, f"{number} / {total}", theme)
+    _drop_empty(slide)
+    _logo(slide, prs, logo)
     slide.notes_slide.notes_text_frame.text = data.notes
 
 
-def build_pptx(deck: Deck, out_path: Path, source: str = "") -> BuildResult:
-    template = config.BRAND_TEMPLATE
+def build_pptx(deck: Deck, out_path: Path, source: str = "", theme: "str | Theme | None" = None,
+               logo: Path | None = None) -> BuildResult:
+    """Construit le PPTX. `theme` : nom d'un thème intégré (build/themes.py, défaut Classique) ;
+    `logo` : image affichée en haut à droite (défaut : templates/logo.png s'il existe)."""
+    style = theme if isinstance(theme, Theme) else get_theme(theme)
+    logo = logo if logo is not None else config.LOGO
+    template = Path(style.template) if style.template else config.BRAND_TEMPLATE
     decorate = not template.exists()  # décor ajouté seulement avec notre template par défaut
     if decorate:
         template = config.TEMPLATES_DIR / "_default_16x9.pptx"
@@ -316,9 +416,10 @@ def build_pptx(deck: Deck, out_path: Path, source: str = "") -> BuildResult:
     with tempfile.TemporaryDirectory() as tmp:  # images intégrées au PPTX puis supprimées
         for number, data in enumerate(deck.slides, start=1):
             if data.layout == "title" and number == 1:
-                _title_slide(prs, deck, data, decorate, source)
+                _title_slide(prs, deck, data, decorate, source, style, logo)
             else:
-                _content_slide(prs, deck, data, number, total, decorate, warnings, Path(tmp))
+                _content_slide(prs, deck, data, number, total, decorate, warnings, Path(tmp),
+                               style, logo)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         prs.save(out_path)
     return BuildResult(out_path, warnings)

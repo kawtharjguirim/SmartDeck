@@ -214,7 +214,7 @@ def guard_self_test() -> None:
     print(f"Garde-fou CA-06 vérifié : {guard.blocked[0]} bloqué", flush=True)
 
 
-def run_campaign(only: str | None, checks_only: bool) -> None:
+def run_campaign(only: str | None, checks_only: bool, with_agent: bool = False) -> None:
     if not checks_only:
         guard_self_test()
     spec = json.loads((SAMPLES / "acceptance.json").read_text(encoding="utf-8"))
@@ -222,23 +222,44 @@ def run_campaign(only: str | None, checks_only: bool) -> None:
     config.OUTPUT_DIR = OUT  # les sorties de la campagne restent à part
     OUT.mkdir(parents=True, exist_ok=True)
 
+    # Deux sources de même nom (rapport_verdi.md / .pdf) écriraient les mêmes fichiers :
+    # on leur donne alors des sorties distinctes (rapport_verdi_md, rapport_verdi_pdf).
+    stems = [Path(d["file"]).stem for d in spec["documents"]]
+
+    def out_name(file: str) -> str:
+        p = Path(file)
+        return f"{p.stem}_{p.suffix[1:]}" if stems.count(p.stem) > 1 else p.stem
+
     rows = []
     for d in docs:
         source = SAMPLES / d["file"]
-        stem = OUT / Path(d["file"]).stem
+        stem = OUT / out_name(d["file"])
         row = {"file": d["file"], "type": d["origin"], "requested": d["slides"],
                "results": {c: [] for c in CRITERIA}, "info": {}}
         print(f"\n▶ {d['file']} ({d['origin']}, {d['slides']} slides)", flush=True)
         t = time.perf_counter()
         try:
-            if checks_only:
+            if with_agent:
+                # Option agent : on part des présentations déjà générées (copiées dans OUT)
+                # pour comparer avant / après sur exactement les mêmes slides.
+                from agent import review
+                run = load_run(Path(f"{stem}.deck.json"))
+                with NetworkGuard() as guard:
+                    result = review(run, pdf=True, log=lambda m: print(f"   🤖 {m}", flush=True))
+                row["results"]["CA-06"] = guard.problems()
+                run.report["acceptance_network"] = guard.problems()
+                save(run)
+                row["agent"] = {"avant": result.score_before, "apres": result.score_after,
+                                "resume": result.summary, "secondes": result.seconds}
+            elif checks_only:
                 run = load_run(Path(f"{stem}.deck.json"))
                 row["results"]["CA-06"] = run.report.get(
                     "acceptance_network", ["réseau non surveillé (régénérer sans --checks)"])
             else:
                 with NetworkGuard() as guard:
                     run = generate(source, d["slides"], None, pdf=True,
-                                   progress=lambda s, n, m: print(f"   {m}", flush=True))
+                                   progress=lambda s, n, m: print(f"   {m}", flush=True),
+                                   out_name=stem.name)
                 row["results"]["CA-06"] = guard.problems()
                 run.report["acceptance_network"] = guard.problems()
                 save(run)  # résultat réseau conservé pour --checks
@@ -292,7 +313,8 @@ def write_report(rows: list[dict], checks_only: bool) -> None:
     header = "| Document | Type | " + " | ".join(CRITERIA) + " | Slides | Visuels | À vérifier |"
     lines = [f"# Recette SmartDeck — {datetime.now():%d/%m/%Y %H:%M}", "",
              f"Modèles : plan {config.PLAN_MODEL}, rédaction {config.WRITE_MODEL}, "
-             f"vision {config.VISION_MODEL}" + (" (contrôles seuls)" if checks_only else ""), "",
+             f"vision {config.VISION_MODEL}" + (" (contrôles seuls)" if checks_only else "")
+             + (f", agent {config.AGENT_MODEL}" if any(r.get("agent") for r in rows) else ""), "",
              header, "|" + "---|" * (len(CRITERIA) + 5)]
     for r in rows:
         info = r["info"]
@@ -307,6 +329,15 @@ def write_report(rows: list[dict], checks_only: bool) -> None:
               + "**", "", "## Détail des échecs", ""]
     failures = [(r["file"], c, p) for r in rows for c in CRITERIA for p in r["results"][c]]
     lines += [f"- {f} — {c} : {p}" for f, c, p in failures] or ["Aucun."]
+    agent_rows = [r for r in rows if r.get("agent")]
+    if agent_rows:
+        lines += ["", "## Agent relecteur", "",
+                  "| Document | Défauts avant | Défauts après | Résumé | Durée |", "|---|---|---|---|---|"]
+        lines += [f"| {r['file']} | {r['agent']['avant']} | {r['agent']['apres']} | "
+                  f"{r['agent']['resume']} | {r['agent']['secondes']:.0f} s |" for r in agent_rows]
+        lines.append(f"| **Total** | {sum(r['agent']['avant'] for r in agent_rows)} | "
+                     f"{sum(r['agent']['apres'] for r in agent_rows)} | | "
+                     f"{sum(r['agent']['secondes'] for r in agent_rows) / 60:.0f} min |")
     report = "\n".join(lines) + "\n"
     (OUT / "recette.md").write_text(report, encoding="utf-8")
     (OUT / "recette.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2),
@@ -323,4 +354,4 @@ if __name__ == "__main__":
         if arg.startswith("--sortie="):
             OUT = config.OUTPUT_DIR / arg.split("=", 1)[1]
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    run_campaign(args[0] if args else None, "--checks" in sys.argv)
+    run_campaign(args[0] if args else None, "--checks" in sys.argv, "--agent" in sys.argv)

@@ -11,3 +11,6 @@ finetune/models/
 finetune/out/
 finetune/data/raw/
 .claude/ 
+
+# Comptes et projets locaux (interface)
+data/

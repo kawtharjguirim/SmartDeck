@@ -1,0 +1,44 @@
+{
+  "theme": {
+    "name": "modele_grey_elegant",
+    "label": "Modèle : Grey_Elegant",
+    "description": "Modèle importé (Grey_Elegant.pptx) : fond, décor et styles du modèle.",
+    "font": "Arial",
+    "font_file": "arial.ttf",
+    "title_font": "Arial",
+    "title_font_file": "arialbd.ttf",
+    "primary": "334155",
+    "accent": "2563EB",
+    "text": "222222",
+    "muted": "6B7280",
+    "title_color": "000000",
+    "background": null,
+    "title_bg": null,
+    "title_slide_text": "000000",
+    "title_slide_sub": "6B7280",
+    "grid": "E5E7EB",
+    "palette": [
+      "#334155",
+      "#2563EB",
+      "#94A3B8",
+      "#0F766E",
+      "#CBD5E1",
+      "#1E293B"
+    ],
+    "node_text": "FFFFFF",
+    "title_rule": "short",
+    "content_rule": "short",
+    "rounded": false,
+    "template": "D:\\SmartDeck\\templates\\imported\\modele_grey_elegant.pptx",
+    "title_layout": 0,
+    "content_layout": 1,
+    "inherit": true
+  },
+  "avertissements": [
+    "Police des titres « Noto Sans » absente de ce PC : le texte est mesuré avec Arial ; PowerPoint ou LibreOffice afficheront une police de remplacement.",
+    "Police du texte « Noto Sans » absente de ce PC : le texte est mesuré avec Arial ; PowerPoint ou LibreOffice afficheront une police de remplacement.",
+    "Le modèle ne définit pas ses propres couleurs de thème : graphiques et diagrammes en gris et bleu neutres.",
+    "2 zone(s) réservée(s) renumérotée(s) : elles partageaient le numéro de la zone de titre (position et style confondus)."
+  ],
+  "source": "Grey_Elegant.pptx"
+}

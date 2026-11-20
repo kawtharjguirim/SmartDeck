@@ -118,14 +118,14 @@ Extraits du document :
 
 def write_slide(document: Document, deck_title: str, slide: PlannedSlide,
                 others: list[str], used: list[str], language: str, known: set[float],
-                visual: str = "") -> tuple[SlideContent, list[str]]:
+                visual: str = "", model: str | None = None) -> tuple[SlideContent, list[str]]:
     """Rédige une slide, avec contrôle des chiffres (FR-12) et des répétitions."""
     context = select_context(document, slide)
     feedback, best = "", None
     for _ in range(config.WRITE_RETRIES + 1):
         content = generate_structured(
             _prompt(deck_title, slide, others, used, context, language, feedback, visual),
-            SlideContent, system=SYSTEM, model=config.WRITE_MODEL,
+            SlideContent, system=SYSTEM, model=model or config.WRITE_MODEL,
         )
         # Puces trop proches de ce qui a déjà été dit : écartées.
         fresh = [b for b in content.bullets
@@ -161,7 +161,8 @@ def write_slide(document: Document, deck_title: str, slide: PlannedSlide,
 DIAGRAM_EXAMPLE = '{"kind": "process", "nodes": ["<élément 1>", "<élément 2>", "<élément 3>"]}'
 
 
-def make_diagram(document: Document, slide: PlannedSlide, language: str, known: set[float]
+def make_diagram(document: Document, slide: PlannedSlide, language: str, known: set[float],
+                 model: str | None = None
                  ) -> tuple[DiagramSpec | None, list[str]]:
     """Éléments du diagramme : lus par la vision (slide.steps) ou tirés des extraits par le LLM."""
     if slide.steps:
@@ -181,7 +182,8 @@ Extraits du document :
 {select_context(document, slide)}
 \"\"\""""
     try:
-        spec = generate_structured(prompt, DiagramSpec, system=SYSTEM, model=config.WRITE_MODEL)
+        spec = generate_structured(prompt, DiagramSpec, system=SYSTEM,
+                                   model=model or config.WRITE_MODEL)
     except LLMError as e:
         return None, [f"« {slide.title} » : diagramme impossible ({e}), slide en puces"]
     missing = unsupported_numbers(" ".join(spec.nodes), known)
@@ -236,13 +238,14 @@ def write(outline: Outline, document: Document,
 
 
 def _compose(document: Document, outline: Outline, planned_slide: PlannedSlide,
-             others: list[str], used: list[str], known: set[float], hint: str = ""
+             others: list[str], used: list[str], known: set[float], hint: str = "",
+             model: str | None = None
              ) -> tuple[Slide, list[str]]:
     """Une slide complète : visuel éventuel, puces et notes."""
     warnings: list[str] = []
     diagram, extra = None, {}
     if planned_slide.layout == "diagram":
-        diagram, w = make_diagram(document, planned_slide, outline.language, known)
+        diagram, w = make_diagram(document, planned_slide, outline.language, known, model)
         warnings += w
         if diagram:
             extra = {"layout": "diagram", "diagram_dot": to_dot(diagram)}
@@ -251,7 +254,7 @@ def _compose(document: Document, outline: Outline, planned_slide: PlannedSlide,
 
     visual = _visual_line(planned_slide, diagram) if extra else ""
     content, w = write_slide(document, outline.title, planned_slide, others, used,
-                             outline.language, known, visual=visual + hint)
+                             outline.language, known, visual=visual + hint, model=model)
     warnings += w
     # À côté d'un visuel, la place manque : on garde les premières puces.
     bullets = content.bullets[: config.VISUAL_BULLETS] if extra else content.bullets
@@ -259,8 +262,8 @@ def _compose(document: Document, outline: Outline, planned_slide: PlannedSlide,
                  bullets=bullets, notes=content.notes), warnings
 
 
-def rewrite_slide(outline: Outline, document: Document, deck: Deck, index: int
-                  ) -> tuple[Slide, list[str]]:
+def rewrite_slide(outline: Outline, document: Document, deck: Deck, index: int,
+                  instruction: str = "", model: str | None = None) -> tuple[Slide, list[str]]:
     """FR-13 : régénère la slide `index` du deck (1 = première slide après le titre).
 
     Les puces des autres slides servent de « déjà dit » ; l'ancienne version est
@@ -269,7 +272,7 @@ def rewrite_slide(outline: Outline, document: Document, deck: Deck, index: int
     planned = outline.planned_slides()
     if not 1 <= index <= len(planned):
         raise ValueError(f"slide {index} : seules les slides 1 à {len(planned)} se régénèrent")
-    if config.PLAN_MODEL != config.WRITE_MODEL:
+    if config.PLAN_MODEL != (model or config.WRITE_MODEL):
         unload(config.PLAN_MODEL)
     old = deck.slides[index]
     used = [b for i, s in enumerate(deck.slides) if i not in (0, index) for b in s.bullets]
@@ -277,5 +280,7 @@ def rewrite_slide(outline: Outline, document: Document, deck: Deck, index: int
     others = titles[: index - 1] + titles[index:]
     hint = ("Version précédente à ne pas reprendre telle quelle : "
             + " | ".join(old.bullets) + "\nPropose des puces formulées autrement.\n")
+    if instruction:  # consigne de l'agent relecteur ou de l'utilisateur
+        hint += f"Consigne pour cette nouvelle version : {instruction}\n"
     return _compose(document, outline, planned[index - 1], others, used,
-                    source_numbers(document), hint=hint)
+                    source_numbers(document), hint=hint, model=model)

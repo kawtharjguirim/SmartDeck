@@ -1,4 +1,4 @@
-# Interface SmartDeck (étape 13). NFR-01 / NFR-03 : tout reste sur la machine.
+# Interface SmartDeck. NFR-01 / NFR-03 : tout reste sur la machine.
 [browser]
 gatherUsageStats = false   # Streamlit n'envoie aucune statistique d'utilisation
 
@@ -7,11 +7,34 @@ address = "localhost"      # accessible seulement depuis ce PC
 port = 8501
 headless = true            # n'ouvre pas de navigateur tout seul
 maxUploadSize = 50         # Mo
+enableStaticServing = true # sert static/ (police Outfit) : aucun appel à Google Fonts
 
 [client]
 toolbarMode = "minimal"
+showSidebarNavigation = true
 
+# Couleurs de la maquette (SmartDeck-app.html) : encre #1A1A3D, violet #7C3AED,
+# magenta #D946EF, barre latérale indigo #1E1B4B.
 [theme]
 base = "light"
-primaryColor = "#1F3A5F"
-font = "sans serif"
+primaryColor = "#7C3AED"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F5F3FF"
+textColor = "#1A1A3D"
+font = "Outfit, 'Segoe UI', sans-serif"
+headingFont = "Outfit, 'Segoe UI', sans-serif"
+baseRadius = "0.75rem"
+borderColor = "#E2E8F0"
+showWidgetBorder = true
+
+# Police de la maquette, servie en local (static/fonts, licence SIL OFL : static/fonts/OFL.txt).
+[[theme.fontFaces]]
+family = "Outfit"
+url = "app/static/fonts/Outfit.ttf"
+weight = "100 900"
+
+[theme.sidebar]
+backgroundColor = "#1E1B4B"
+secondaryBackgroundColor = "#2E2A6B"
+textColor = "#E0E7FF"
+borderColor = "#3B3680"
